@@ -1,0 +1,27 @@
+services:
+
+  tarot-bot:
+    build: .
+    container_name: tarot-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - TAROT_API_URL=http://tarot-api:8000
+      - WEBHOOK_HOST=https://bot.baldcat.dev
+      - PORT=8080
+    networks:
+      - traefik-public
+      - traefik-private
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.tarot-bot.rule=Host(`bot.baldcat.dev`)"
+      - "traefik.http.routers.tarot-bot.entrypoints=websecure"
+      - "traefik.http.routers.tarot-bot.tls.certresolver=letsencrypt"
+      - "traefik.http.services.tarot-bot.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik-public"
+
+networks:
+  traefik-public:
+    external: true
+  traefik-private:
+    external: true

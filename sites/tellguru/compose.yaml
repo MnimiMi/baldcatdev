@@ -1,0 +1,21 @@
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: tellguru-nginx
+    restart: unless-stopped
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./html:/var/www/html:ro
+    networks:
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.tellguru.rule=Host(`tell.guru`) || Host(`www.tell.guru`)"
+      - "traefik.http.routers.tellguru.entrypoints=websecure"
+      - "traefik.http.routers.tellguru.tls.certresolver=letsencrypt"
+      - "traefik.http.services.tellguru.loadbalancer.server.port=80"
+
+networks:
+  traefik-public:
+    external: true

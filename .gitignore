@@ -1,0 +1,22 @@
+# Default ignored files
+/shelf/
+/workspace.xml
+
+# Editor-based HTTP Client requests
+/httpRequests/
+
+# Datasource local storage ignored files
+/dataSources/
+/dataSources.local.xml
+
+.env
+.env.*
+**/.env
+/.idea/
+**/__pycache__/
+*.pyc
+bots/tarot/meaning_gpt.py
+/sites/tellguru/html/images/
+/db/
+*images/
+ARCHITECTURE.md

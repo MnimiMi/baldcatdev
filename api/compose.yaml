@@ -1,0 +1,25 @@
+services:
+
+  tarot-api:
+    build: .
+    container_name: tarot-api
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ${IMAGES_HOST_PATH}:/var/tarot_images:ro
+    networks:
+      - traefik-public
+      - traefik-private
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.tarot-api.rule=Host(`apps.baldcat.dev`)"
+      - "traefik.http.routers.tarot-api.entrypoints=websecure"
+      - "traefik.http.routers.tarot-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.tarot-api.loadbalancer.server.port=8000"
+      - "traefik.docker.network=traefik-public"
+
+networks:
+  traefik-public:
+    external: true
+  traefik-private:
+    external: true
