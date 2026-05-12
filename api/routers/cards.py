@@ -1,4 +1,6 @@
 import json
+import datetime
+import random
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
@@ -6,8 +8,62 @@ from pydantic import BaseModel
 
 from core.deck_class import Deck
 from core.legacy_card import Card, GPTMEANING, get_meaning, get_imean
+from core.db_class import MongoDBHandler
 
 router = APIRouter(prefix="/cards", tags=["cards"])
+
+_BOT_COPY_COLLECTION = "bot_copy"
+_THREE_CARD_COPY_KEY = "THREE_CARD_DRAW"
+_DEFAULT_THREE_CARD_COPY = {
+    "ru": [
+        "Наш оракул вслушивается в ваш вопрос...",
+        "Шепот судьбы уже складывается в расклад...",
+        "Три карты открывают для вас линию ответа...",
+        "Оракул собирает три знака для вашего пути...",
+        "Нити прошлого, настоящего и будущего уже сходятся...",
+    ],
+    "uk": [
+        "Наш оракул дослухається до вашого запитання...",
+        "Шепіт долі вже складається у розклад...",
+        "Три карти відкривають для вас лінію відповіді...",
+        "Оракул збирає три знаки для вашого шляху...",
+        "Нитки минулого, теперішнього і майбутнього вже сходяться...",
+    ],
+    "en": [
+        "Our oracle is listening closely to your question...",
+        "The whisper of fate is settling into a spread...",
+        "Three cards are opening a path toward your answer...",
+        "The oracle is gathering three signs for your journey...",
+        "Past, present, and future are beginning to align...",
+    ],
+    "fr": [
+        "Notre oracle se concentre sur votre question...",
+        "Le murmure du destin se rassemble en tirage...",
+        "Trois cartes ouvrent deja le chemin de votre reponse...",
+        "L'oracle rassemble trois signes pour votre route...",
+        "Passe, present et futur commencent a s'aligner...",
+    ],
+}
+
+
+def _get_random_copy_from_db(key: str, lang: str) -> str:
+    db = MongoDBHandler().get_db()
+    collection = db[_BOT_COPY_COLLECTION]
+    doc_id = f"{key}:{lang}"
+    doc = collection.find_one({"_id": doc_id})
+    if doc is None:
+        defaults = _DEFAULT_THREE_CARD_COPY.get(lang) or _DEFAULT_THREE_CARD_COPY["en"]
+        doc = {
+            "_id": doc_id,
+            "key": key,
+            "lang": lang,
+            "messages": defaults,
+            "updated_at": datetime.datetime.utcnow(),
+        }
+        collection.insert_one(doc)
+
+    messages = doc.get("messages") or _DEFAULT_THREE_CARD_COPY.get(lang) or _DEFAULT_THREE_CARD_COPY["en"]
+    return random.choice(messages)
 
 
 class RunePredictRequest(BaseModel):
@@ -219,6 +275,12 @@ def image_name(val: int, suite: int = 0, orient: int = 0, lang: str = "en"):
 def get_string(key: str = Query(...), lang: str = Query("en")):
     from core.local_class import Localizator
     message = Localizator.get_string(key, lang)
+    return {"success": True, "message": message}
+
+
+@router.get("/random-copy")
+def get_random_copy(key: str = Query(...), lang: str = Query("en")):
+    message = _get_random_copy_from_db(key, lang)
     return {"success": True, "message": message}
 
 

@@ -37,6 +37,46 @@ class TarotDrawClaimRequest(BaseModel):
     action: str = "tarot_quantity"
 
 
+class TelegramFileCacheRequest(BaseModel):
+    file_id: str
+
+
+_TELEGRAM_FILE_CACHE = "telegram_file_cache"
+
+
+@router.get("/telegram/file-cache/{key}")
+def get_telegram_file_cache(key: str):
+    cached = MongoDBHandler().select(_TELEGRAM_FILE_CACHE, "key", key)
+    return {
+        "success": True,
+        "found": cached is not None,
+        "file_id": cached.get("file_id") if cached else None,
+        "updated_at": cached.get("updated_at").isoformat() if cached and cached.get("updated_at") else None,
+    }
+
+
+@router.put("/telegram/file-cache/{key}")
+def save_telegram_file_cache(key: str, req: TelegramFileCacheRequest):
+    db = MongoDBHandler().get_db()
+    db[_TELEGRAM_FILE_CACHE].update_one(
+        {"key": key},
+        {
+            "$set": {
+                "file_id": req.file_id,
+                "updated_at": datetime.datetime.utcnow(),
+            }
+        },
+        upsert=True,
+    )
+    return {"success": True}
+
+
+@router.delete("/telegram/file-cache/{key}")
+def delete_telegram_file_cache(key: str):
+    MongoDBHandler().get_db()[_TELEGRAM_FILE_CACHE].delete_one({"key": key})
+    return {"success": True}
+
+
 @router.post("/check")
 def user_check(req: LoginRequest):
     user = WebUser(req.login)

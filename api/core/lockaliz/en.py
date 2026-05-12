@@ -129,6 +129,7 @@ dictionary = {
     "GET_REVIEW": "Open your mind! 👽 (write directly to the chat, please)",
     "ABOUT_US": "About us 😻",
     "INACTIVE": "Card is inactive.",
+    "DRAW_IN_PROGRESS": "Please wait, your previous spread is still being sent.",
     "3_CARDS": "3 cards",
     "PERSONAL_KB": "Personal tarot-telling",
     "DAILY_KB": "Daily tarot-telling",

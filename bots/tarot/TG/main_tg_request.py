@@ -12,13 +12,14 @@ from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters import Command, ChatTypeFilter
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.types import InputFile
-from aiogram.utils.exceptions import InvalidHTTPUrlContent
+from aiogram.utils.exceptions import BadRequest, InvalidHTTPUrlContent, RetryAfter
 
 from TG import config
 from TG.api_client import (
     draw as api_draw, get_user, save_lang, accept_rules as api_accept_rules,
     start_trial as api_start_trial, mark_daily, get_string as api_get_string,
-    claim_tarot_draw
+    claim_tarot_draw, get_cached_file_id, save_cached_file_id, delete_cached_file_id,
+    get_random_copy
 )
 from TG.config import TELEGRAM_SUPPORT_CHAT_ID
 from TG.context_taro import Context
@@ -40,6 +41,8 @@ _TYPE_TO_PATH = {
 APPS_BASE = os.getenv('APPS_BASE_URL', 'https://apps.baldcat.dev')
 
 _drawing_in_progress: set[tuple[int, int, int]] = set()
+_users_with_active_draws: set[int] = set()
+_MAX_SEND_RETRIES = 3
 
 
 def _prepare_url(method: str, **kwargs) -> str:
@@ -57,6 +60,11 @@ async def _localize(key: str, lang: str) -> str:
         return await api_get_string(key, lang)
     except Exception:
         return key
+
+
+def _build_card_cache_key(suit, value: int, orient: int) -> str:
+    normalized_suit = 0 if suit in (None, 0) else suit
+    return f"{normalized_suit}_{value}_{orient}"
 
 
 async def start_command(message, state: FSMContext = None, user_data: dict = None):
@@ -209,6 +217,7 @@ async def personal_tarot_request(message: types.Message, state: FSMContext):
     user_data = await get_user(message.from_user.id)
     await state.finish()
     await make_reading(
+        bot=message.bot,
         number_of_cards=1,
         message_from_user=message.text,
         _lang=user_data.get('lang', 'en'),
@@ -298,6 +307,18 @@ async def get_card_quantity(callback_query: CallbackQuery, state: FSMContext = N
     message_id = callback_query.message.message_id
     draw_key = (user_id, chat_id, message_id)
 
+    if user_id in _users_with_active_draws:
+        try:
+            user_data = await get_user(user_id)
+            lang = user_data.get('lang', 'en')
+            await callback_query.answer(await _localize("DRAW_IN_PROGRESS", lang), show_alert=True)
+        except Exception:
+            try:
+                await callback_query.answer()
+            except Exception:
+                pass
+        return
+
     if draw_key in _drawing_in_progress:
         try:
             await callback_query.answer()
@@ -306,16 +327,19 @@ async def get_card_quantity(callback_query: CallbackQuery, state: FSMContext = N
         return
 
     _drawing_in_progress.add(draw_key)
+    _users_with_active_draws.add(user_id)
 
     try:
         await callback_query.answer()
         claim = await claim_tarot_draw(user_id, chat_id, message_id)
         if not claim.get("claimed"):
             _drawing_in_progress.discard(draw_key)
+            _users_with_active_draws.discard(user_id)
             return
         await callback_query.message.edit_reply_markup(reply_markup=None)
     except Exception:
         _drawing_in_progress.discard(draw_key)
+        _users_with_active_draws.discard(user_id)
         return
 
     callback_data = callback_query.data
@@ -328,27 +352,93 @@ async def get_card_quantity(callback_query: CallbackQuery, state: FSMContext = N
     user_data = await get_user(user_id)
     lang = user_data.get('lang', 'en')
     number_of_cards = int(callback_query.data.split(":")[1])
-    _daily = 0
+    is_daily = number_of_cards == 1
 
-    if number_of_cards == 1:
-        await mark_daily(chat_id)
-        _daily = 1
+    asyncio.create_task(
+        _process_tarot_draw(
+            bot=callback_query.bot,
+            chat_id=chat_id,
+            user_id=user_id,
+            lang=lang,
+            number_of_cards=number_of_cards,
+            is_daily=is_daily,
+            source_message=callback_query.message,
+            draw_key=draw_key,
+        )
+    )
 
+
+async def _process_tarot_draw(
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    lang: str,
+    number_of_cards: int,
+    is_daily: bool,
+    source_message: types.Message,
+    draw_key: tuple[int, int, int],
+):
+    started_at = asyncio.get_running_loop().time()
+    logging.info(
+        "Starting tarot draw for user %s: cards=%s daily=%s chat=%s",
+        user_id,
+        number_of_cards,
+        is_daily,
+        chat_id,
+    )
     try:
-        await make_reading(number_of_cards, lang, _daily, chat_id=chat_id)
+        if number_of_cards == 3 and not is_daily:
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=await get_random_copy("THREE_CARD_DRAW", lang),
+                )
+            except Exception:
+                logging.exception("Failed to send three-card intro message for user %s", user_id)
+        await make_reading(
+            bot=bot,
+            number_of_cards=number_of_cards,
+            _lang=lang,
+            _daily=1 if is_daily else 0,
+            chat_id=chat_id,
+        )
+        if is_daily:
+            await mark_daily(chat_id)
+        await source_message.delete()
+        elapsed = asyncio.get_running_loop().time() - started_at
+        logging.info(
+            "Completed tarot draw for user %s in %.2fs",
+            user_id,
+            elapsed,
+        )
     except Exception:
         logging.exception("Failed to make tarot reading for user %s", user_id)
-        await callback_query.message.answer("Something went wrong while drawing the cards. Please try again.")
-        return
+        await source_message.answer("Something went wrong while drawing the cards. Please try again.")
     finally:
         _drawing_in_progress.discard(draw_key)
-    await callback_query.message.delete()
+        _users_with_active_draws.discard(user_id)
 
 
-async def make_reading(number_of_cards: int, _lang: str, _daily: int = 0, chat_id=None, message_from_user: str = None):
+async def make_reading(
+    bot: Bot,
+    number_of_cards: int,
+    _lang: str,
+    _daily: int = 0,
+    chat_id=None,
+    message_from_user: str = None,
+):
+    draw_started_at = asyncio.get_running_loop().time()
     result = await api_draw(number_of_cards, _lang)
     if not result.get('success'):
         raise Exception("Draw failed")
+    draw_elapsed = asyncio.get_running_loop().time() - draw_started_at
+    logging.info(
+        "api_draw completed in %.2fs for chat %s: cards=%s daily=%s",
+        draw_elapsed,
+        chat_id,
+        number_of_cards,
+        _daily,
+    )
 
     cards = result['cards']
     contexts = ["past", "present", "future"]
@@ -388,22 +478,81 @@ async def make_reading(number_of_cards: int, _lang: str, _daily: int = 0, chat_i
             web_app=WebAppInfo(url=url)
         ))
 
+        card_code = _build_card_cache_key(_suit, _value, _orient)
+        send_started_at = asyncio.get_running_loop().time()
+        logging.info(
+            "Sending card %s/%s to chat %s: code=%s label=%s",
+            i + 1,
+            len(cards),
+            chat_id,
+            card_code,
+            label,
+        )
         await send_tarot_photo(
-            bot=Bot.get_current(),
+            bot=bot,
             chat_id=chat_id,
+            card_code=card_code,
             photo_url=_prepare_url('image', val=_value, suite=_suit, orient=_orient),
             caption=label,
             reply_markup=kb,
         )
+        send_elapsed = asyncio.get_running_loop().time() - send_started_at
+        logging.info(
+            "Sent card %s/%s to chat %s in %.2fs: code=%s",
+            i + 1,
+            len(cards),
+            chat_id,
+            send_elapsed,
+            card_code,
+        )
 
 
-async def send_tarot_photo(bot: Bot, chat_id, photo_url: str, caption: str, reply_markup):
+async def _send_photo_with_retry(bot: Bot, chat_id, photo, caption: str, reply_markup):
+    for attempt in range(1, _MAX_SEND_RETRIES + 1):
+        try:
+            return await bot.send_photo(chat_id=chat_id, photo=photo, caption=caption, reply_markup=reply_markup)
+        except RetryAfter as exc:
+            retry_after = getattr(exc, "timeout", None) or getattr(exc, "retry_after", 1)
+            logging.warning(
+                "Telegram flood control for chat %s, retrying in %s seconds (attempt %s/%s)",
+                chat_id,
+                retry_after,
+                attempt,
+                _MAX_SEND_RETRIES,
+            )
+            if attempt == _MAX_SEND_RETRIES:
+                raise
+            await asyncio.sleep(retry_after)
+
+
+def _extract_file_id(message: types.Message) -> str | None:
+    if not message or not getattr(message, "photo", None):
+        return None
+    return message.photo[-1].file_id if message.photo else None
+
+
+async def send_tarot_photo(bot: Bot, chat_id, card_code: str, photo_url: str, caption: str, reply_markup):
+    cached_file_id = await get_cached_file_id(card_code)
+    if cached_file_id:
+        logging.info("Telegram file cache hit for %s", card_code)
+        try:
+            await _send_photo_with_retry(bot, chat_id, cached_file_id, caption, reply_markup)
+            return
+        except BadRequest:
+            logging.warning("Telegram file cache invalid for %s, falling back to URL upload", card_code)
+            await delete_cached_file_id(card_code)
+
+    logging.info("Telegram file cache miss for %s", card_code)
     try:
-        await bot.send_photo(chat_id=chat_id, photo=photo_url, caption=caption, reply_markup=reply_markup)
+        message = await _send_photo_with_retry(bot, chat_id, photo_url, caption, reply_markup)
     except InvalidHTTPUrlContent:
         logging.warning("Telegram could not fetch image URL, uploading directly: %s", photo_url)
         photo = await _download_as_input_file(photo_url)
-        await bot.send_photo(chat_id=chat_id, photo=photo, caption=caption, reply_markup=reply_markup)
+        message = await _send_photo_with_retry(bot, chat_id, photo, caption, reply_markup)
+
+    file_id = _extract_file_id(message)
+    if file_id:
+        await save_cached_file_id(card_code, file_id)
 
 
 async def _download_as_input_file(url: str) -> InputFile:
@@ -435,7 +584,9 @@ async def start_trial_handler(query: CallbackQuery):
 async def forward_to_context(message: types.Message):
     user_data = await get_user(message.from_user.id)
     await make_reading(
-        1, _lang=user_data.get('lang', 'en'),
+        bot=message.bot,
+        number_of_cards=1,
+        _lang=user_data.get('lang', 'en'),
         message_from_user=message.text, chat_id=message.chat.id
     )
 

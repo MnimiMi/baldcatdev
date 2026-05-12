@@ -154,6 +154,7 @@ dictionary = {
     "GET_REVIEW": "Ouvrez votre esprit! 👽 (écrivez directement sur le chat, s'il vous plaît)",
     "ABOUT_US": "Nous sommes 😻",
     "INACTIVE": "Дa carte n'est pas active",
+    "DRAW_IN_PROGRESS": "Veuillez patienter, votre tirage precedent est encore en cours d'envoi.",
     "3_CARDS": "3 cartes",
     "PERSONAL_KB": "Tarot de la personne",
     "DAILY_KB": "Carte du jour",

@@ -87,9 +87,33 @@ async def claim_tarot_draw(tg_id: int, chat_id: int, message_id: int) -> dict:
     )
 
 
+async def get_cached_file_id(key: str) -> str | None:
+    result = await _get(f'/users/telegram/file-cache/{key}')
+    if result.get('found'):
+        return result.get('file_id')
+    return None
+
+
+async def save_cached_file_id(key: str, file_id: str) -> dict:
+    return await _put(f'/users/telegram/file-cache/{key}', {'file_id': file_id})
+
+
+async def delete_cached_file_id(key: str) -> dict:
+    url = API_BASE + f'/users/telegram/file-cache/{key}'
+    async with aiohttp.ClientSession() as session:
+        async with session.delete(url, timeout=aiohttp.ClientTimeout(total=20)) as r:
+            r.raise_for_status()
+            return await r.json()
+
+
 async def get_string(key: str, lang: str, tg_id: int = None) -> str:
     """Get localized string, with optional tg_id for rate limiting"""
     result = await _get('/cards/string', {'key': key, 'lang': lang}, tg_id)
+    return result.get('message', key)
+
+
+async def get_random_copy(key: str, lang: str, tg_id: int = None) -> str:
+    result = await _get('/cards/random-copy', {'key': key, 'lang': lang}, tg_id)
     return result.get('message', key)
 
 
